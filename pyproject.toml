@@ -31,5 +31,6 @@ packages = ["src/vinted_listing"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["tests"]
-addopts = "-m 'not live'"
+# Repo-local temp dir: a broken %TEMP%\pytest-of-<user> folder must not break the suite.
+addopts = "-m 'not live' --basetemp=.pytest_tmp"
 markers = ["live: calls real external services or downloads models (run with -m live)"]
