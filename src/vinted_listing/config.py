@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -129,6 +130,14 @@ class Settings:
         if stage not in efforts:
             raise ValueError(f"unknown stage: {stage!r}")
         return efforts[stage]
+
+
+def with_profile(settings: Settings, profile: str) -> Settings:
+    """Settings with every stage model taken from `profile`, ignoring per-stage overrides."""
+    if profile not in MODEL_PROFILES:
+        raise ValueError(f"unknown model profile {profile!r}; use one of {sorted(MODEL_PROFILES)}")
+    models = {f"model_{stage}": model for stage, model in MODEL_PROFILES[profile].items()}
+    return dataclasses.replace(settings, model_profile=profile, **models)
 
 
 def default_state_dir(env: Mapping[str, str]) -> Path:

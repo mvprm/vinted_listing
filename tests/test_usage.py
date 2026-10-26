@@ -63,6 +63,15 @@ def test_month_summary_and_fallback_flag(tmp_path):
     assert summary["remaining_usd"] == pytest.approx(10.0 - summary["cost_usd"])
 
 
+def test_item_totals(tmp_path):
+    ledger = UsageLedger(tmp_path / "s.db", make_settings(tmp_path))
+    with ledger.item_scope("a"):
+        ledger.record("research", "claude-opus-5-5", usage(input_tokens=1_000_000, output_tokens=0, searches=2,
+                                                           fetches=1), now=NOW)
+    assert ledger.item_totals("a") == {"cost_usd": pytest.approx(4.02), "searches": 2, "fetches": 1}
+    assert ledger.item_totals("missing") == {"cost_usd": 0.0, "searches": 0, "fetches": 0}
+
+
 def test_item_cost(tmp_path):
     ledger = UsageLedger(tmp_path / "s.db", make_settings(tmp_path))
     with ledger.item_scope("a"):

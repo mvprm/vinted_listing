@@ -1,6 +1,6 @@
 import pytest
 
-from vinted_listing.config import load_settings
+from vinted_listing.config import load_settings, with_profile
 
 
 def test_load_settings_defaults(tmp_path):
@@ -15,6 +15,19 @@ def test_opus_profile_and_stage_override(tmp_path):
     s = load_settings({"DRIVE_ROOT": str(tmp_path), "MODEL_PROFILE": "opus", "MODEL_PARSE": "claude-haiku-5-5"})
     assert s.model_research == "claude-opus-5-5" and s.model_parse == "claude-haiku-5-5"
     assert s.model_for("comparables") == s.model_research
+
+
+def test_with_profile_ignores_stage_overrides(tmp_path):
+    s = load_settings({"DRIVE_ROOT": str(tmp_path), "MODEL_LISTING": "claude-opus-5-5"})
+    opus = with_profile(s, "opus")
+    assert opus.model_profile == "opus" and opus.model_describe == "claude-opus-5-5"
+    mixed = with_profile(s, "mixed")
+    assert mixed.model_listing == "claude-sonnet-5-5" and mixed.model_describe == "claude-haiku-5-5"
+
+
+def test_with_profile_rejects_unknown(tmp_path):
+    with pytest.raises(ValueError, match="profile"):
+        with_profile(load_settings({"DRIVE_ROOT": str(tmp_path)}), "cheap")
 
 
 def test_unknown_profile_names_variable(tmp_path):

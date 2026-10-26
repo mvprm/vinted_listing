@@ -113,6 +113,15 @@ class UsageLedger:
     def item_cost_usd(self, item: str) -> float:
         return float(self._scalar("SELECT COALESCE(SUM(cost_usd), 0) FROM usage WHERE item = ?", item))
 
+    def item_totals(self, item: str) -> dict:
+        """All-time totals for one item; callers diff two readings to get one run's share."""
+        with self._connect() as conn:
+            cost, searches, fetches = conn.execute(
+                "SELECT COALESCE(SUM(cost_usd),0), COALESCE(SUM(searches),0), COALESCE(SUM(fetches),0)"
+                " FROM usage WHERE item = ?", (item,),
+            ).fetchone()
+        return {"cost_usd": float(cost), "searches": int(searches), "fetches": int(fetches)}
+
     def month_summary(self, now: datetime | None = None) -> dict:
         start = _month_start(now or datetime.now()).isoformat()
         with self._connect() as conn:
