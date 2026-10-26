@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -32,6 +33,7 @@ log = logging.getLogger(__name__)
 PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
 IGNORED_NAMES = {"desktop.ini", "error.txt"}
 IGNORED_EXTENSIONS = {".tmp", ".gdoc", ".gsheet", ".gslides", ".lnk"}
+PACKAGE_PHOTO = re.compile(r"\d{2,}\.jpg")
 
 
 @dataclass
@@ -92,6 +94,13 @@ def find_hint_file(folder: Path) -> tuple[Path | None, list[str]]:
     return None, []
 
 
+def _clear_package(out_dir: Path) -> None:
+    """Remove files from an earlier package (NN.jpg, listing.*) so no stale photo survives a rebuild."""
+    for p in out_dir.iterdir():
+        if p.is_file() and (PACKAGE_PHOTO.fullmatch(p.name) or p.name in ("listing.txt", "listing.json")):
+            p.unlink()
+
+
 @contextmanager
 def _step(name: str) -> Iterator[None]:
     try:
@@ -123,6 +132,7 @@ def build_package(
 
         with _step("photos"):
             out_dir.mkdir(parents=True, exist_ok=True)
+            _clear_package(out_dir)
             for processed in process_photos_cached(name, photos, settings, deps.remover):
                 shutil.copy2(processed, out_dir / processed.name)
 

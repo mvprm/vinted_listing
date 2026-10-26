@@ -157,6 +157,14 @@ def test_cost_is_this_runs_ledger_total(tmp_path, settings):
     assert r.cost_usd == 0.0  # FakeLLM records nothing; earlier $4 is not this run's
 
 
+def test_rebuild_into_same_folder_leaves_no_stale_photos(tmp_path, settings):
+    out = tmp_path / "o"
+    build_package("x", photos(tmp_path, 3), None, out, settings, deps_for(settings))
+    single = [write_photo(tmp_path / "item2" / "IMG_1.jpg")]
+    build_package("x", single, None, out, settings, deps_for(settings))
+    assert sorted(p.name for p in out.iterdir()) == ["01.jpg", "listing.json", "listing.txt"]
+
+
 def test_extra_warnings_reach_listing_txt(tmp_path, settings):
     r = build_package("x", photos(tmp_path, 1), None, tmp_path / "o", settings, deps_for(settings),
                       extra_warnings=["several .txt files; name the hint hint.txt"])
