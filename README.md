@@ -112,8 +112,8 @@ Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/). Developed and used o
 desktop; the code itself is cross-platform.
 
 ```bash
-git clone <this repo>
-cd vinted-listing
+git clone https://github.com/mvprm/vinted_listing.git
+cd vinted_listing
 uv venv --python 3.12 .venv
 uv pip install --python .venv -e ".[dev]"
 .venv/Scripts/python -m pytest        # Windows; use .venv/bin/python on Linux/macOS
@@ -197,7 +197,7 @@ Estimated at list prices; the `costs` command reports what was actually used.
 ## Running in the background (Windows)
 
 ```bat
-schtasks /Create /SC ONLOGON /TN vinted-listing /TR "\"C:\path\to\vinted-listing\.venv\Scripts\pythonw.exe\" -m vinted_listing watch"
+schtasks /Create /SC ONLOGON /TN vinted-listing /TR "\"C:\path\to\vinted_listing\.venv\Scripts\pythonw.exe\" -m vinted_listing watch"
 schtasks /Run /TN vinted-listing
 ```
 
