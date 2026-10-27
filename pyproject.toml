@@ -1,22 +1,33 @@
 [project]
 name = "vinted-listing"
 version = "0.1.0"
-description = "Turn product photos dropped into Google Drive into ready-to-post Vinted listings."
-requires-python = ">=3.11"
+description = "Turn product photos dropped into Google Drive into ready-to-post second-hand listings with Claude."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "mvprm" }]
+requires-python = ">=3.12"
+keywords = ["claude", "anthropic", "llm", "computer-vision", "background-removal", "second-hand", "listing"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+    "Topic :: Multimedia :: Graphics",
+]
 dependencies = [
-    "anthropic",
-    "pydantic>=2",
-    "pillow",
-    "pillow-heif",
-    "opencv-python-headless",
-    "numpy",
-    "rembg[cpu]",
-    "python-dotenv",
+    "anthropic>=2.3,<3",
+    "pydantic>=2.14,<3",
+    "pillow>=13,<14",
+    "pillow-heif>=1.8,<2",
+    "opencv-python-headless>=5.0,<6",
+    "numpy>=2.5,<3",
+    "rembg[cpu]>=2.0.86,<3",
+    "python-dotenv>=1.2,<2",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest"]
-vision = ["google-cloud-vision"]
+dev = ["pytest>=9,<10"]
+vision = ["google-cloud-vision"]  # reserved for the planned reverse image match
 
 [project.scripts]
 vinted-listing = "vinted_listing.cli:main"

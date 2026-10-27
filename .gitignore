@@ -5,3 +5,7 @@ __pycache__/
 .pytest_cache/
 .superpowers/
 .pytest_tmp/
+
+# Private notes: kept locally, never published
+instruction_guide.md
+implementation-plan-*.md
