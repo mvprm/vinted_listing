@@ -139,7 +139,7 @@ def test_watch_prunes_creates_folders_and_survives_a_bad_cycle(tmp_path, monkeyp
     pruned, cycles = [], []
     monkeypatch.setattr(cli, "prune_cache", lambda d: pruned.append(d) or 0)
 
-    def flaky_cycle(*args):
+    def flaky_cycle(*args, **kwargs):
         cycles.append(1)
         if len(cycles) == 1:
             raise OSError("Drive went offline")
@@ -160,7 +160,7 @@ def test_watch_waits_for_drive_to_mount(tmp_path, monkeypatch):
     blocker.write_text("a file where the drive folder should be: mkdir fails like an unmounted drive")
     settings = dataclasses.replace(settings, drive_root=blocker / "Vinted")
     cycles = []
-    monkeypatch.setattr(cli, "run_cycle", lambda *a: cycles.append(1) or [])
+    monkeypatch.setattr(cli, "run_cycle", lambda *a, **k: cycles.append(1) or [])
     sleeps = []
 
     def sleep(seconds):
@@ -180,6 +180,84 @@ def test_watch_crash_is_logged(env, monkeypatch, caplog):
     monkeypatch.setattr(cli, "watch", boom)
     assert cli.main(["watch"]) == 1
     assert "background model download failed" in caplog.text
+
+
+def test_run_cycle_finishes_current_item_then_stops(tmp_path):
+    import threading
+
+    settings, deps, store, scanner, clock = watch_parts(tmp_path)
+    stop = threading.Event()
+    inner_parse = deps.llm.parse
+
+    def parse_and_request_stop(*args, **kwargs):  # SIGTERM arrives while the first item is being built
+        stop.set()
+        return inner_parse(*args, **kwargs)
+
+    deps.llm.parse = parse_and_request_stop
+    for name in ("a-item", "b-item"):
+        write_photo(settings.inbox / name / "IMG_1.jpg")
+        (settings.inbox / name / "hint.txt").write_text("size: M", encoding="utf-8")
+    cli.run_cycle(scanner, settings, deps, store, stop=stop)
+    clock.t = 121
+    results = cli.run_cycle(scanner, settings, deps, store, stop=stop)
+    assert [(r.name, r.status) for r in results] == [("a-item", "ready")]
+    assert (settings.inbox / "b-item" / "IMG_1.jpg").exists()  # untouched, picked up on the next start
+    assert [b.folder.name for b in scanner.scan().ready] == ["b-item"]
+
+
+def test_watch_returns_promptly_when_stop_is_requested(tmp_path, monkeypatch):
+    import threading
+
+    settings, deps, store, scanner, clock = watch_parts(tmp_path, poll_seconds=3600)
+    monkeypatch.setattr(cli, "prune_cache", lambda d: 0)
+    stop = threading.Event()
+    cycles = []
+
+    def cycle_then_stop(*args, **kwargs):
+        cycles.append(1)
+        stop.set()
+        return []
+
+    monkeypatch.setattr(cli, "run_cycle", cycle_then_stop)
+    cli.watch(settings, deps, max_cycles=5, stop=stop)  # would sleep an hour if the stop were ignored
+    assert cycles == [1]
+
+
+def test_watch_writes_heartbeat(tmp_path, monkeypatch):
+    import json
+
+    settings, deps, store, scanner, clock = watch_parts(tmp_path)
+    monkeypatch.setattr(cli, "prune_cache", lambda d: 0)
+    cli.watch(settings, deps, max_cycles=1, sleep=lambda s: None)
+    beat = json.loads(settings.heartbeat_file.read_text(encoding="utf-8"))
+    assert beat["drive_ready"] is True
+
+
+def test_main_watch_turns_sigterm_into_a_graceful_stop(env, monkeypatch):
+    import signal
+
+    handlers = {}
+    monkeypatch.setattr(cli.signal, "signal", lambda signum, handler: handlers.__setitem__(signum, handler))
+    seen = {}
+
+    def fake_watch(settings, deps, stop=None, **kw):
+        handlers[signal.SIGTERM](signal.SIGTERM, None)  # docker stop
+        seen["stopped"] = stop.is_set()
+
+    monkeypatch.setattr(cli, "watch", fake_watch)
+    assert cli.main(["watch"]) == 0
+    assert seen == {"stopped": True}
+
+
+def test_health_command(env, capsys):
+    from vinted_listing.config import load_settings
+    from vinted_listing.health import write_heartbeat
+
+    assert cli.main(["health"]) == 1
+    assert "no heartbeat" in capsys.readouterr().out
+    write_heartbeat(load_settings().heartbeat_file, drive_ready=True)
+    assert cli.main(["health"]) == 0
+    assert cli.main(["health", "--max-age", "0"]) == 1
 
 
 def test_second_watch_exits_3(env, capsys):

@@ -106,6 +106,10 @@ class Settings:
     def preprocessed_dir(self) -> Path:
         return self.state_dir / "preprocessed"
 
+    @property
+    def heartbeat_file(self) -> Path:
+        return self.state_dir / "heartbeat.json"
+
     def model_for(self, stage: str) -> str:
         """The model for a pipeline stage. Comparables research uses the research model."""
         models = {
