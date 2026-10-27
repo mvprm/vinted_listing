@@ -4,16 +4,122 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
+import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from vinted_listing.config import MODEL_PROFILES, Settings, load_settings, with_profile
 from vinted_listing.evaluation import compare_reports, run_eval
-from vinted_listing.pipeline import BudgetDeferred, Deps, StepError, build_package, find_hint_file, list_photos
+from vinted_listing.imaging import prune_cache
+from vinted_listing.pipeline import (
+    BudgetDeferred,
+    Deps,
+    ProductResult,
+    StepError,
+    build_package,
+    fail_empty,
+    find_hint_file,
+    list_photos,
+    process_product,
+)
+from vinted_listing.scanner import InboxScanner
+from vinted_listing.status import write_status
+from vinted_listing.store import StateStore
 from vinted_listing.usage import BudgetGuard, UsageLedger
 
 EXIT_FAILED, EXIT_CONFIG, EXIT_DEFERRED = 1, 2, 3
+EXIT_ALREADY_RUNNING = 3
+PRUNE_EVERY_SECONDS = 24 * 3600
+
+log = logging.getLogger("vinted_listing.watch")
+
+
+class LockHeld(Exception):
+    pass
+
+
+@contextmanager
+def acquire_lock(path: Path) -> Iterator[None]:
+    """Exclusive, non-blocking lock on `path`, so only one watcher runs at a time."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(path, "a+")
+    try:
+        handle.seek(0)
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            raise LockHeld(str(path)) from exc
+        try:
+            yield
+        finally:
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        handle.close()
+
+
+def run_cycle(scanner: InboxScanner, settings: Settings, deps: Deps, store: StateStore) -> list[ProductResult]:
+    store.clear_resolved()
+    scan = scanner.scan()
+    results: list[ProductResult] = []
+    for batch in scan.ready:
+        result = process_product(batch, settings, deps, store)
+        results.append(result)
+        if result.status not in ("deferred", "retry"):  # those keep their snapshot and come back next cycle
+            scanner.forget(batch.folder)
+    for folder in scan.empty:
+        results.append(fail_empty(folder, settings, store))
+        scanner.forget(folder)
+    for loose in scan.loose_files:
+        log.warning("loose file in inbox (put it in an item folder): %s", loose.name)
+    try:
+        write_status(settings, scan, results, deps.ledger, store, datetime.now())
+    except OSError as exc:
+        log.error("could not write status.txt: %s", exc)
+    return results
+
+
+def watch(settings: Settings, deps: Deps, max_cycles: int | None = None,
+          sleep: Callable[[float], None] = time.sleep) -> None:
+    for folder in (settings.inbox, settings.ready, settings.failed):
+        folder.mkdir(parents=True, exist_ok=True)
+    store = StateStore(settings.db_path)
+    scanner = InboxScanner(settings.inbox, settings.quiet_seconds, settings.hint_grace_seconds)
+    last_prune: float | None = None
+    cycles = 0
+    log.info("watching %s every %ss", settings.inbox, settings.poll_seconds)
+    while max_cycles is None or cycles < max_cycles:
+        if last_prune is None or time.monotonic() - last_prune >= PRUNE_EVERY_SECONDS:
+            removed = prune_cache(settings.preprocessed_dir)
+            last_prune = time.monotonic()
+            if removed:
+                log.info("pruned %d old photo cache folders", removed)
+        try:
+            run_cycle(scanner, settings, deps, store)
+        except Exception:  # Drive offline, file locked...: log it and try again next cycle
+            log.exception("watch cycle failed; retrying in %ss", settings.poll_seconds)
+        cycles += 1
+        if max_cycles is None or cycles < max_cycles:
+            sleep(settings.poll_seconds)
 
 
 def build_deps(settings: Settings) -> Deps:
@@ -54,6 +160,7 @@ def _parser() -> argparse.ArgumentParser:
     cmp.add_argument("report_a", type=Path)
     cmp.add_argument("report_b", type=Path)
     sub.add_parser("costs", help="month-to-date API cost and remaining budget")
+    sub.add_parser("watch", help="watch the Drive inbox and build packages as folders finish uploading")
     return parser
 
 
@@ -107,6 +214,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     setup_logging(settings)
+    if args.command == "watch":
+        try:
+            with acquire_lock(settings.state_dir / "watch.lock"):
+                watch(settings, build_deps(settings))
+        except LockHeld:
+            print("already running: another 'watch' holds the lock", file=sys.stderr)
+            return EXIT_ALREADY_RUNNING
+        except KeyboardInterrupt:
+            log.info("stopped")
+        return 0
     if args.command == "run":
         return _run(settings, args.folder, args.out)
     if args.profile:

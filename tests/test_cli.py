@@ -86,6 +86,92 @@ def test_costs_prints_summary(env, capsys):
     assert "Month to date: $0.00 of $20.00" in out and "remaining $20.00" in out
 
 
+class Clock:
+    def __init__(self):
+        self.t = 0.0
+
+    def __call__(self):
+        return self.t
+
+
+def watch_parts(tmp_path, **overrides):
+    from fakes import make_settings
+    from vinted_listing.scanner import InboxScanner
+    from vinted_listing.store import StateStore
+
+    settings = make_settings(tmp_path, **overrides)
+    ledger = UsageLedger(settings.db_path, settings)
+    deps = Deps(llm=fake_llm(), remover=FakeRemover(), ledger=ledger, budget=BudgetGuard(ledger, settings))
+    clock = Clock()
+    scanner = InboxScanner(settings.inbox, settings.quiet_seconds, settings.hint_grace_seconds, clock=clock)
+    return settings, deps, StateStore(settings.db_path), scanner, clock
+
+
+def test_run_cycle_processes_ready_and_empty(tmp_path):
+    settings, deps, store, scanner, clock = watch_parts(tmp_path)
+    write_photo(settings.inbox / "levis" / "IMG_1.jpg")
+    (settings.inbox / "levis" / "hint.txt").write_text("size: M", encoding="utf-8")
+    (settings.inbox / "clip").mkdir()
+    (settings.inbox / "clip" / "clip.mp4").write_bytes(b"x")
+    (settings.inbox / "stray.jpg").write_bytes(b"x")
+    assert cli.run_cycle(scanner, settings, deps, store) == []  # first sighting: still settling
+    clock.t = 121
+    results = cli.run_cycle(scanner, settings, deps, store)
+    assert sorted((r.name, r.status) for r in results) == [("clip", "failed"), ("levis", "ready")]
+    assert (settings.ready / "levis" / "listing.txt").exists() and (settings.failed / "clip" / "error.txt").exists()
+    status = settings.status_file.read_text(encoding="utf-8")
+    assert "levis: ready" in status and "stray.jpg" in status
+
+
+def test_deferred_items_not_forgotten(tmp_path):
+    settings, deps, store, scanner, clock = watch_parts(tmp_path, monthly_budget_usd=0.0)
+    write_photo(settings.inbox / "toy" / "IMG_1.jpg")
+    (settings.inbox / "toy" / "hint.txt").write_text("brand: LEGO", encoding="utf-8")
+    cli.run_cycle(scanner, settings, deps, store)
+    clock.t = 121
+    assert [r.status for r in cli.run_cycle(scanner, settings, deps, store)] == ["deferred"]
+    assert [b.folder.name for b in scanner.scan().ready] == ["toy"]  # still tracked: no new quiet period
+    assert "monthly budget" in settings.status_file.read_text(encoding="utf-8")
+
+
+def test_watch_prunes_creates_folders_and_survives_a_bad_cycle(tmp_path, monkeypatch):
+    settings, deps, store, scanner, clock = watch_parts(tmp_path)
+    pruned, cycles = [], []
+    monkeypatch.setattr(cli, "prune_cache", lambda d: pruned.append(d) or 0)
+
+    def flaky_cycle(*args):
+        cycles.append(1)
+        if len(cycles) == 1:
+            raise OSError("Drive went offline")
+        return []
+
+    monkeypatch.setattr(cli, "run_cycle", flaky_cycle)
+    cli.watch(settings, deps, max_cycles=3, sleep=lambda s: None)
+    assert len(cycles) == 3 and pruned == [settings.preprocessed_dir]
+    assert settings.inbox.is_dir() and settings.ready.is_dir() and settings.failed.is_dir()
+
+
+def test_second_watch_exits_3(env, capsys):
+    settings_home = env / "home"
+    with cli.acquire_lock(settings_home / "watch.lock"):
+        assert cli.main(["watch"]) == 3
+    assert "already running" in capsys.readouterr().err
+
+
+def test_lock_released_after_use(tmp_path):
+    with cli.acquire_lock(tmp_path / "watch.lock"):
+        pass
+    with cli.acquire_lock(tmp_path / "watch.lock"):
+        pass
+
+
+def test_watch_missing_drive_root_exits_2(monkeypatch, tmp_path, capsys):
+    monkeypatch.delenv("DRIVE_ROOT", raising=False)
+    monkeypatch.setenv("VINTED_LISTING_HOME", str(tmp_path / "home"))
+    assert cli.main(["watch"]) == 2
+    assert "DRIVE_ROOT" in capsys.readouterr().err
+
+
 def test_missing_drive_root_exits_2(monkeypatch, tmp_path, capsys):
     monkeypatch.delenv("DRIVE_ROOT", raising=False)
     monkeypatch.setenv("VINTED_LISTING_HOME", str(tmp_path / "home"))
