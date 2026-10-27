@@ -40,6 +40,21 @@ def write_photo(path: Path, size: tuple[int, int] = (400, 300), colour: tuple[in
     return path
 
 
+def api_error(cls, status: int, message: str = "simulated"):
+    """An anthropic.APIStatusError subclass instance, built the way the SDK builds them."""
+    import httpx2
+
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    return cls(message, response=httpx2.Response(status, request=request), body=None)
+
+
+def connection_error():
+    import anthropic
+    import httpx2
+
+    return anthropic.APIConnectionError(request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages"))
+
+
 def usage(input_tokens=1000, output_tokens=100, cache_read=0, searches=0, fetches=0, fallback=False):
     """Duck-typed stand-in for the SDK's BetaUsage."""
     iterations = [SimpleNamespace(type="fallback_message", model="claude-opus-5")] if fallback else None
@@ -57,16 +72,18 @@ class FakeLLM:
     """LLMClient double: canned results per output type / research call, records every call."""
 
     def __init__(self, parse_results: dict[type, Any] | None = None,
-                 research_results: list[ResearchResult] | None = None, raise_on: str | None = None) -> None:
+                 research_results: list[ResearchResult] | None = None, raise_on: str | None = None,
+                 raise_exc: BaseException | None = None) -> None:
         self.parse_results = parse_results or {}
         self.research_results = list(research_results or [])
         self.raise_on = raise_on
+        self.raise_exc = raise_exc
         self.calls: list[dict] = []
 
     def _record(self, kind: str, stage: str, system: str, content: list[dict], **extra) -> None:
         self.calls.append({"kind": kind, "stage": stage, "system": system, "content": content, **extra})
         if self.raise_on in (kind, stage):
-            raise RuntimeError(f"FakeLLM raising on {self.raise_on}")
+            raise self.raise_exc or RuntimeError(f"FakeLLM raising on {self.raise_on}")
 
     def parse(self, output_type, system, content, *, stage, effort):
         self._record("parse", stage, system, content, effort=effort, output_type=output_type)
