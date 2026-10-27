@@ -65,7 +65,7 @@ class PackageResult:
     cost_usd: float
 
 
-def _ignored(path: Path) -> bool:
+def is_ignored(path: Path) -> bool:
     name = path.name
     return (name.startswith((".", "~$")) or name.lower() in IGNORED_NAMES
             or path.suffix.lower() in IGNORED_EXTENSIONS)
@@ -74,13 +74,13 @@ def _ignored(path: Path) -> bool:
 def list_photos(folder: Path) -> list[Path]:
     """Photos in a folder, sorted by file name; the first one is the cover."""
     return sorted((p for p in folder.iterdir()
-                   if p.is_file() and not _ignored(p) and p.suffix.lower() in PHOTO_EXTENSIONS),
+                   if p.is_file() and not is_ignored(p) and p.suffix.lower() in PHOTO_EXTENSIONS),
                   key=lambda p: p.name.lower())
 
 
 def find_hint_file(folder: Path) -> tuple[Path | None, list[str]]:
     """hint.txt if present, else the only .txt file; plus warnings about hints we can't use."""
-    texts = sorted((p for p in folder.iterdir() if p.is_file() and not _ignored(p) and p.suffix.lower() == ".txt"),
+    texts = sorted((p for p in folder.iterdir() if p.is_file() and not is_ignored(p) and p.suffix.lower() == ".txt"),
                    key=lambda p: p.name.lower())
     for p in texts:
         if p.name.lower() == "hint.txt":
