@@ -1,0 +1,16 @@
+# Only pyproject.toml, uv.lock, README.md, LICENSE and src/ are needed to build the image.
+.git
+.github
+.venv
+.env
+.pytest_cache
+.pytest_tmp
+.superpowers
+**/__pycache__
+*.egg-info
+tests
+docs
+instruction_guide.md
+implementation-plan-*.md
+docker-compose.yml
+Dockerfile

@@ -25,3 +25,20 @@ jobs:
 
       - name: Offline test suite (live tests are excluded by default)
         run: uv run --no-sync pytest
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image (not pushed anywhere)
+        run: docker build -t vinted-listing:ci .
+
+      - name: Native libraries import inside the image
+        run: docker run --rm --entrypoint python vinted-listing:ci -c "import cv2, onnxruntime, pillow_heif, rembg, vinted_listing.cli"
+
+      - name: Commands run as the container user with its default paths
+        run: |
+          docker run --rm -e ANTHROPIC_API_KEY=unused vinted-listing:ci costs
+          # No watcher has run, so health must report unhealthy (exit 1).
+          if docker run --rm vinted-listing:ci health; then echo "health should fail without a heartbeat"; exit 1; fi
