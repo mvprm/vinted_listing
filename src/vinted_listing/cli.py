@@ -98,14 +98,23 @@ def run_cycle(scanner: InboxScanner, settings: Settings, deps: Deps, store: Stat
     return results
 
 
+def _drive_ready(settings: Settings) -> bool:
+    """Create inbox/ready/failed; False while the Drive folder isn't reachable (e.g. not mounted yet at logon)."""
+    try:
+        for folder in (settings.inbox, settings.ready, settings.failed):
+            folder.mkdir(parents=True, exist_ok=True)
+        return True
+    except OSError:
+        return False
+
+
 def watch(settings: Settings, deps: Deps, max_cycles: int | None = None,
           sleep: Callable[[float], None] = time.sleep) -> None:
-    for folder in (settings.inbox, settings.ready, settings.failed):
-        folder.mkdir(parents=True, exist_ok=True)
     store = StateStore(settings.db_path)
     scanner = InboxScanner(settings.inbox, settings.quiet_seconds, settings.hint_grace_seconds)
     last_prune: float | None = None
     cycles = 0
+    waiting_for_drive = False
     log.info("watching %s every %ss", settings.inbox, settings.poll_seconds)
     while max_cycles is None or cycles < max_cycles:
         if last_prune is None or time.monotonic() - last_prune >= PRUNE_EVERY_SECONDS:
@@ -113,10 +122,18 @@ def watch(settings: Settings, deps: Deps, max_cycles: int | None = None,
             last_prune = time.monotonic()
             if removed:
                 log.info("pruned %d old photo cache folders", removed)
-        try:
-            run_cycle(scanner, settings, deps, store)
-        except Exception:  # Drive offline, file locked...: log it and try again next cycle
-            log.exception("watch cycle failed; retrying in %ss", settings.poll_seconds)
+        if not _drive_ready(settings):
+            if not waiting_for_drive:
+                log.warning("Drive folder %s not reachable yet; waiting", settings.drive_root)
+            waiting_for_drive = True
+        else:
+            if waiting_for_drive:
+                log.info("Drive folder %s is reachable again", settings.drive_root)
+            waiting_for_drive = False
+            try:
+                run_cycle(scanner, settings, deps, store)
+            except Exception:  # Drive offline, file locked...: log it and try again next cycle
+                log.exception("watch cycle failed; retrying in %ss", settings.poll_seconds)
         cycles += 1
         if max_cycles is None or cycles < max_cycles:
             sleep(settings.poll_seconds)
@@ -223,6 +240,9 @@ def main(argv: list[str] | None = None) -> int:
             return EXIT_ALREADY_RUNNING
         except KeyboardInterrupt:
             log.info("stopped")
+        except Exception:  # under pythonw there is no console: the log file is the only trace
+            log.exception("watch stopped by an unexpected error")
+            return EXIT_FAILED
         return 0
     if args.command == "run":
         return _run(settings, args.folder, args.out)

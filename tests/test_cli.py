@@ -151,6 +151,37 @@ def test_watch_prunes_creates_folders_and_survives_a_bad_cycle(tmp_path, monkeyp
     assert settings.inbox.is_dir() and settings.ready.is_dir() and settings.failed.is_dir()
 
 
+def test_watch_waits_for_drive_to_mount(tmp_path, monkeypatch):
+    import dataclasses
+
+    settings, deps, store, scanner, clock = watch_parts(tmp_path)
+    monkeypatch.setattr(cli, "prune_cache", lambda d: 0)
+    blocker = tmp_path / "G-not-mounted"
+    blocker.write_text("a file where the drive folder should be: mkdir fails like an unmounted drive")
+    settings = dataclasses.replace(settings, drive_root=blocker / "Vinted")
+    cycles = []
+    monkeypatch.setattr(cli, "run_cycle", lambda *a: cycles.append(1) or [])
+    sleeps = []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) == 2:  # the drive appears after two polls
+            blocker.unlink()
+
+    cli.watch(settings, deps, max_cycles=4, sleep=sleep)
+    assert len(cycles) == 2  # no cycles until the drive was there
+    assert settings.inbox.is_dir() and settings.ready.is_dir() and settings.failed.is_dir()
+
+
+def test_watch_crash_is_logged(env, monkeypatch, caplog):
+    def boom(settings, deps, **kw):
+        raise RuntimeError("background model download failed")
+
+    monkeypatch.setattr(cli, "watch", boom)
+    assert cli.main(["watch"]) == 1
+    assert "background model download failed" in caplog.text
+
+
 def test_second_watch_exits_3(env, capsys):
     settings_home = env / "home"
     with cli.acquire_lock(settings_home / "watch.lock"):
