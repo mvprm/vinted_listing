@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import signal
 import sys
+import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -15,6 +17,7 @@ from pathlib import Path
 
 from vinted_listing.config import MODEL_PROFILES, Settings, load_settings, with_profile
 from vinted_listing.evaluation import compare_reports, run_eval
+from vinted_listing.health import DEFAULT_MAX_AGE_SECONDS, check_health, write_heartbeat
 from vinted_listing.imaging import prune_cache
 from vinted_listing.pipeline import (
     BudgetDeferred,
@@ -77,16 +80,25 @@ def acquire_lock(path: Path) -> Iterator[None]:
         handle.close()
 
 
-def run_cycle(scanner: InboxScanner, settings: Settings, deps: Deps, store: StateStore) -> list[ProductResult]:
+def run_cycle(scanner: InboxScanner, settings: Settings, deps: Deps, store: StateStore,
+              stop: threading.Event | None = None,
+              on_item_done: Callable[[], None] | None = None) -> list[ProductResult]:
+    """One pass over the inbox. With `stop` set, the item in progress finishes and the rest wait for the next start."""
     store.clear_resolved()
     scan = scanner.scan()
     results: list[ProductResult] = []
     for batch in scan.ready:
+        if stop is not None and stop.is_set():
+            break
         result = process_product(batch, settings, deps, store)
         results.append(result)
         if result.status not in ("deferred", "retry"):  # those keep their snapshot and come back next cycle
             scanner.forget(batch.folder)
+        if on_item_done is not None:
+            on_item_done()
     for folder in scan.empty:
+        if stop is not None and stop.is_set():
+            break
         results.append(fail_empty(folder, settings, store))
         scanner.forget(folder)
     for loose in scan.loose_files:
@@ -108,21 +120,33 @@ def _drive_ready(settings: Settings) -> bool:
         return False
 
 
+def _beat(settings: Settings, drive_ready: bool) -> None:
+    try:
+        write_heartbeat(settings.heartbeat_file, drive_ready=drive_ready)
+    except OSError as exc:
+        log.error("could not write heartbeat: %s", exc)
+
+
 def watch(settings: Settings, deps: Deps, max_cycles: int | None = None,
-          sleep: Callable[[float], None] = time.sleep) -> None:
+          sleep: Callable[[float], None] | None = None, stop: threading.Event | None = None) -> None:
+    """Poll the inbox until `stop` is set (SIGTERM, e.g. `docker stop`) or `max_cycles` passes run (tests)."""
+    stop = stop or threading.Event()
+    wait = sleep or stop.wait  # stop.wait returns as soon as a stop is requested
     store = StateStore(settings.db_path)
     scanner = InboxScanner(settings.inbox, settings.quiet_seconds, settings.hint_grace_seconds)
     last_prune: float | None = None
     cycles = 0
     waiting_for_drive = False
     log.info("watching %s every %ss", settings.inbox, settings.poll_seconds)
-    while max_cycles is None or cycles < max_cycles:
+    while (max_cycles is None or cycles < max_cycles) and not stop.is_set():
         if last_prune is None or time.monotonic() - last_prune >= PRUNE_EVERY_SECONDS:
             removed = prune_cache(settings.preprocessed_dir)
             last_prune = time.monotonic()
             if removed:
                 log.info("pruned %d old photo cache folders", removed)
-        if not _drive_ready(settings):
+        drive_ready = _drive_ready(settings)
+        _beat(settings, drive_ready)
+        if not drive_ready:
             if not waiting_for_drive:
                 log.warning("Drive folder %s not reachable yet; waiting", settings.drive_root)
             waiting_for_drive = True
@@ -131,12 +155,14 @@ def watch(settings: Settings, deps: Deps, max_cycles: int | None = None,
                 log.info("Drive folder %s is reachable again", settings.drive_root)
             waiting_for_drive = False
             try:
-                run_cycle(scanner, settings, deps, store)
+                run_cycle(scanner, settings, deps, store, stop=stop, on_item_done=lambda: _beat(settings, True))
             except Exception:  # Drive offline, file locked...: log it and try again next cycle
                 log.exception("watch cycle failed; retrying in %ss", settings.poll_seconds)
         cycles += 1
-        if max_cycles is None or cycles < max_cycles:
-            sleep(settings.poll_seconds)
+        if (max_cycles is None or cycles < max_cycles) and not stop.is_set():
+            wait(settings.poll_seconds)
+    if stop.is_set():
+        log.info("stop requested: watcher exiting cleanly")
 
 
 def build_deps(settings: Settings) -> Deps:
@@ -178,6 +204,9 @@ def _parser() -> argparse.ArgumentParser:
     cmp.add_argument("report_b", type=Path)
     sub.add_parser("costs", help="month-to-date API cost and remaining budget")
     sub.add_parser("watch", help="watch the Drive inbox and build packages as folders finish uploading")
+    health = sub.add_parser("health", help="exit 0 if the watcher is alive and can reach the Drive folder")
+    health.add_argument("--max-age", type=float, default=DEFAULT_MAX_AGE_SECONDS,
+                        help=f"seconds since the last heartbeat (default {DEFAULT_MAX_AGE_SECONDS})")
     return parser
 
 
@@ -224,6 +253,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "costs":
         return _costs(settings)
+    if args.command == "health":
+        ok, message = check_health(settings.heartbeat_file, max_age=args.max_age)
+        print(message)
+        return 0 if ok else EXIT_FAILED
     if args.command == "eval-compare":
         text = compare_reports(args.report_a, args.report_b)
         (args.report_b.parent / "compare.txt").write_text(text, encoding="utf-8")
@@ -232,9 +265,16 @@ def main(argv: list[str] | None = None) -> int:
 
     setup_logging(settings)
     if args.command == "watch":
+        stop = threading.Event()
+
+        def request_stop(signum, frame):  # SIGTERM: docker stop, systemd, kill
+            log.info("signal %s received: finishing the current item, then stopping", signum)
+            stop.set()
+
+        signal.signal(signal.SIGTERM, request_stop)
         try:
             with acquire_lock(settings.state_dir / "watch.lock"):
-                watch(settings, build_deps(settings))
+                watch(settings, build_deps(settings), stop=stop)
         except LockHeld:
             print("already running: another 'watch' holds the lock", file=sys.stderr)
             return EXIT_ALREADY_RUNNING

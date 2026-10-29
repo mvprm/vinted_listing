@@ -29,6 +29,12 @@ dependencies = [
 dev = ["pytest>=9,<10"]
 vision = ["google-cloud-vision"]  # reserved for the planned reverse image match
 
+[project.urls]
+Homepage = "https://github.com/mvprm/vinted_listing"
+Documentation = "https://github.com/mvprm/vinted_listing/blob/main/docs/design.md"
+Issues = "https://github.com/mvprm/vinted_listing/issues"
+Changelog = "https://github.com/mvprm/vinted_listing/blob/main/CHANGELOG.md"
+
 [project.scripts]
 vinted-listing = "vinted_listing.cli:main"
 

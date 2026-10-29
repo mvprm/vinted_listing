@@ -1,0 +1,30 @@
+# Runs the watcher in a container. Put your settings in a .env file next to this one (see .env.example):
+# at least ANTHROPIC_API_KEY and VINTED_DRIVE_DIR (the host folder that holds inbox/, ready/, failed/).
+#
+#   docker compose up -d --build          start (and restart automatically)
+#   docker compose logs -f                follow the log
+#   docker compose run --rm watcher costs one-off commands: costs, health, run /data/drive/inbox/<item>
+#   docker compose down                   stop (the item in progress finishes first)
+#
+# Run only ONE watcher per Drive folder: stop the Windows logon task before starting this.
+services:
+  watcher:
+    build: .
+    image: vinted-listing:local
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Fixed container paths; these override any Windows paths in .env.
+      DRIVE_ROOT: /data/drive
+      VINTED_LISTING_HOME: /data/state
+      U2NET_HOME: /data/models
+      TZ: ${TZ:-Europe/Lisbon}
+    volumes:
+      - ${VINTED_DRIVE_DIR:?set VINTED_DRIVE_DIR in .env to the folder that holds inbox/, ready/, failed/}:/data/drive
+      - state:/data/state     # cost ledger, item history, logs, photo cache
+      - models:/data/models   # background-removal model, downloaded once
+    stop_grace_period: 5m     # let the item in progress finish on docker stop
+
+volumes:
+  state:
+  models:

@@ -143,6 +143,24 @@ per-snapshot check would reprocess the leftover files as a new item.
 cache daily, survives a failing cycle, and writes `status.txt` atomically (temp file + replace) so Drive never syncs a
 half-written file. On Windows it runs at logon as a scheduled task with `pythonw.exe`.
 
+Stopping is graceful: SIGTERM (`docker stop`, systemd, `kill`) sets a stop flag, the item in progress finishes, the
+remaining items stay in the inbox for the next start, and the poll sleep wakes immediately. The watcher writes
+`<state_dir>/heartbeat.json` on every poll and after every item; `health` reports unhealthy when the heartbeat is older
+than 10 minutes, missing, or says the Drive folder is unreachable.
+
+### Container
+
+The `Dockerfile` builds a virtualenv from `uv.lock` in a build stage and copies it into a slim runtime image that runs
+as UID 1000 with fixed paths: `/data/drive` (the Drive folder), `/data/state` (ledger, history, logs, cache) and
+`/data/models` (the rembg model, downloaded on first start). `docker-compose.yml` mounts the host's Drive folder,
+keeps state and models in named volumes, sets `TZ` (budget periods follow local time), restarts the service and allows
+five minutes for the item in progress on stop. The image's health check calls `health`.
+
+Constraints: one watcher per Drive folder (the single-instance lock is per state folder, so a host watcher and a
+container watcher cannot see each other); on Windows the Drive folder must be a real folder (Drive's mirror mode),
+because WSL2 cannot reliably mount Drive for desktop's streaming drive; on Linux hosts a sync tool has to provide the
+folder.
+
 ## Testing
 
 - Offline suite (pytest): fakes for the Claude client (`FakeLLM`, a fake messages API) and for background removal;
@@ -158,5 +176,5 @@ half-written file. On Windows it runs at logon as a scheduled task with `pythonw
 - Skip colour correction automatically on coloured backgrounds.
 - Toy-specific fields (age range, completeness).
 - Reverse image match (Google Cloud Vision Web Detection) for items with no tag, if evaluation shows it is needed.
-- Container image (with graceful SIGTERM shutdown and a health check) for an always-on machine.
+- A sync container (e.g. rclone) so the container can run on a Linux host without Google Drive for desktop.
 - Optional OpenTelemetry tracing of API calls (metadata only) to a local Phoenix or Jaeger.

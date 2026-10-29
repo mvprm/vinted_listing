@@ -1,5 +1,10 @@
 # vinted-listing
 
+[![tests](https://github.com/mvprm/vinted_listing/actions/workflows/tests.yml/badge.svg)](https://github.com/mvprm/vinted_listing/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)
+![Claude API](https://img.shields.io/badge/LLM-Claude%20API-d97757.svg)
+
 Turn a folder of product photos into a ready-to-post second-hand listing: photos on a clean neutral background, plus
 copy-paste text for every field of the listing form (title, description, category, brand, size, condition, colours,
 material, parcel size and a suggested price).
@@ -204,6 +209,39 @@ schtasks /Run /TN vinted-listing
 The watcher waits for the Drive folder to be mounted, allows a single instance, and logs to
 `<state_dir>/logs/vinted-listing.log`. `schtasks /End` stops it and `schtasks /Delete /TN vinted-listing /F` removes it.
 
+## Running with Docker (optional)
+
+Useful on an always-on Linux machine, or anywhere you prefer a container to a local Python install. The image runs
+`watch` as a non-root user, restarts automatically, reports its health, and lets the item in progress finish on
+`docker stop`.
+
+1. Copy `.env.example` to `.env` in the repo folder and set at least `ANTHROPIC_API_KEY` and `VINTED_DRIVE_DIR`, the
+   host folder that holds `inbox/`, `ready/` and `failed/`. Optionally set `TZ` (default `Europe/Lisbon`); the
+   monthly budget and daily limit follow it.
+2. Start it:
+
+   ```bash
+   docker compose up -d --build
+   docker compose logs -f                            # follow the log
+   docker compose ps                                 # health: starting / healthy / unhealthy
+   docker compose run --rm watcher costs             # one-off commands
+   docker compose run --rm watcher run /data/drive/inbox/<item>
+   docker compose down                               # stop; the current item finishes first
+   ```
+
+Notes:
+
+- **Run only one watcher per Drive folder.** Two watchers (e.g. the Windows logon task and a container) would each
+  process the same items and pay for them twice; stop the logon task first (`schtasks /End /TN vinted-listing`).
+- **Google Drive on Windows:** Docker Desktop runs containers inside WSL2, which cannot reliably see Google Drive for
+  desktop's virtual drive (streaming mode, e.g. `G:`). Use Drive's *mirror* mode, whose files live in a normal folder,
+  and point `VINTED_DRIVE_DIR` there. On Linux there is no Drive for desktop; a sync tool such as rclone would have to
+  provide the folder (not included).
+- The first start downloads the background-removal model (about 1 GB) into the `models` volume; the container shows
+  as *starting* until then. The cost ledger, history and logs live in the `state` volume.
+- On a Linux host, the Drive folder must be writable by UID 1000 (the container user).
+- `health` exits 0 when the watcher's heartbeat is recent (default 10 minutes) and the Drive folder is reachable.
+
 ## Development
 
 ```bash
@@ -222,8 +260,14 @@ A golden set is a folder of item subfolders, each with photos, an optional `hint
 - The listing schema is clothing-oriented; toy-specific fields (age range, completeness) are not modelled yet.
 - Items with no tag and no visible branding rely on Claude's description; a reverse image match (Google Cloud Vision
   Web Detection) is planned if evaluation shows it is needed.
-- Planned: container image and optional OpenTelemetry tracing of API calls.
+- Planned: optional OpenTelemetry tracing of API calls, and a sync container (e.g. rclone) for hosts without Google
+  Drive for desktop.
 - Costs are estimates at public list prices.
+
+## Contributing and security
+
+Issues and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Please report security issues privately
+as described in [SECURITY.md](SECURITY.md). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
