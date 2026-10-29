@@ -1,5 +1,10 @@
 # vinted-listing
 
+[![tests](https://github.com/mvprm/vinted_listing/actions/workflows/tests.yml/badge.svg)](https://github.com/mvprm/vinted_listing/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)
+![Claude API](https://img.shields.io/badge/LLM-Claude%20API-d97757.svg)
+
 Turn a folder of product photos into a ready-to-post second-hand listing: photos on a clean neutral background, plus
 copy-paste text for every field of the listing form (title, description, category, brand, size, condition, colours,
 material, parcel size and a suggested price).
@@ -258,6 +263,11 @@ A golden set is a folder of item subfolders, each with photos, an optional `hint
 - Planned: optional OpenTelemetry tracing of API calls, and a sync container (e.g. rclone) for hosts without Google
   Drive for desktop.
 - Costs are estimates at public list prices.
+
+## Contributing and security
+
+Issues and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Please report security issues privately
+as described in [SECURITY.md](SECURITY.md). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
